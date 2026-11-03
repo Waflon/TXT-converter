@@ -1,6 +1,7 @@
 """Convierte los documentos de la carpeta 'input' (PDF, DOC, DOCX, PPT, PPTX)
 a archivos TXT en la carpeta 'output'."""
 
+import glob
 import re
 import struct
 import sys
@@ -21,6 +22,7 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "input"
 OUTPUT_DIR = BASE_DIR / "output"
+TAMANO_MAXIMO = 150 * 1024  # bytes por archivo TXT (150 KB, como lo muestra Windows)
 
 
 # ---------------------------------------------------------------- PDF
@@ -255,6 +257,47 @@ EXTRACTORES = {
 }
 
 
+def _bytes_en_disco(texto: str) -> int:
+    # UTF-8, y en Windows cada "\n" se guarda como "\r\n" (un byte más).
+    return len(texto.encode("utf-8")) + texto.count("\n")
+
+
+def _cortar_linea(linea: str, maximo: int) -> list[str]:
+    """Corta una línea demasiado larga, preferentemente en un espacio."""
+    piezas = []
+    while _bytes_en_disco(linea) > maximo:
+        # Búsqueda binaria del prefijo más largo que cabe (sin romper caracteres).
+        lo, hi = 1, len(linea)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if _bytes_en_disco(linea[:mid]) <= maximo:
+                lo = mid
+            else:
+                hi = mid - 1
+        corte = linea.rfind(" ", 0, lo) + 1 or lo
+        piezas.append(linea[:corte])
+        linea = linea[corte:]
+    piezas.append(linea)
+    return piezas
+
+
+def dividir_texto(texto: str, maximo: int = TAMANO_MAXIMO) -> list[str]:
+    """Divide el texto en partes de como máximo `maximo` bytes, cortando al final de línea."""
+    partes, actual, tamano = [], [], 0
+    for linea in texto.splitlines(keepends=True):
+        piezas = _cortar_linea(linea, maximo) if _bytes_en_disco(linea) > maximo else [linea]
+        for pieza in piezas:
+            b = _bytes_en_disco(pieza)
+            if actual and tamano + b > maximo:
+                partes.append("".join(actual))
+                actual, tamano = [], 0
+            actual.append(pieza)
+            tamano += b
+    if actual or not partes:
+        partes.append("".join(actual))
+    return partes
+
+
 def convertir_todos() -> tuple[int, list[str]]:
     """Convierte todos los archivos soportados. Devuelve (convertidos, errores)."""
     INPUT_DIR.mkdir(exist_ok=True)
@@ -277,8 +320,17 @@ def convertir_todos() -> tuple[int, list[str]]:
             nombre = archivo.stem
             if nombres.count(archivo.stem.lower()) > 1:
                 nombre += "_" + archivo.suffix.lower().lstrip(".")
-            destino = OUTPUT_DIR / f"{nombre}.txt"
-            destino.write_text(texto, encoding="utf-8")
+            # Se borran las salidas anteriores de este documento para no dejar partes viejas.
+            patron = re.compile(rf"{re.escape(nombre)}(_parte\d+)?\.txt", re.IGNORECASE)
+            for viejo in OUTPUT_DIR.glob(f"{glob.escape(nombre)}*.txt"):
+                if patron.fullmatch(viejo.name):
+                    viejo.unlink()
+            partes = dividir_texto(texto)
+            if len(partes) == 1:
+                (OUTPUT_DIR / f"{nombre}.txt").write_text(partes[0], encoding="utf-8")
+            else:
+                for n, parte in enumerate(partes, 1):
+                    (OUTPUT_DIR / f"{nombre}_parte{n}.txt").write_text(parte, encoding="utf-8")
             convertidos += 1
         except Exception as e:
             errores.append(f"{archivo.name}: no se pudo convertir ({e})")
