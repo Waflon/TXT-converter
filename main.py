@@ -3,6 +3,7 @@ a archivos TXT en la carpeta 'output'."""
 
 import re
 import struct
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -13,7 +14,11 @@ from docx import Document
 from pptx import Presentation
 from pypdf import PdfReader
 
-BASE_DIR = Path(__file__).resolve().parent
+# Como .exe (PyInstaller) se usa la carpeta del ejecutable, no la temporal donde se descomprime.
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).resolve().parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "input"
 OUTPUT_DIR = BASE_DIR / "output"
 
